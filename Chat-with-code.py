@@ -1,28 +1,63 @@
 import streamlit as st
 import os
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import GooglePalmEmbeddings, OllamaEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import GooglePalm
-from langchain_community.chat_models import ChatOllama
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain_classic.chains import ConversationalRetrievalChain
+from langchain_classic.memory import ConversationBufferMemory
 
-os.environ['GOOGLE_API_KEY'] = st.secrets["GOOGLE_API_KEY"]
+# Try loading API key from config if exists
+try:
+    from config import GOOGLE_API_KEY
+    if GOOGLE_API_KEY:
+        os.environ['GOOGLE_API_KEY'] = GOOGLE_API_KEY
+except ImportError:
+    pass
+
+try:
+    if "GOOGLE_API_KEY" in st.secrets:
+        os.environ['GOOGLE_API_KEY'] = st.secrets["GOOGLE_API_KEY"]
+except Exception:
+    pass
+
+def apply_styles():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Inter:wght@300;400;600&display=swap');
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+        h1, h2, h3 {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            background: linear-gradient(135deg, #FF4B4B 0%, #FF8F8F 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 24px;
+            margin-bottom: 24px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
 def extract_text_from_code(code_file):
-    return code_file.getvalue().decode("utf-8")
+    return code_file.getvalue().decode("utf-8", errors="ignore")
 
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=256)
     return text_splitter.split_text(text)
 
-def get_vector_store(text_chunks, use_ollama):
-    embeddings = OllamaEmbeddings(model="llama2") if use_ollama else GooglePalmEmbeddings()
+def get_vector_store(text_chunks, use_ollama, ollama_model):
+    embeddings = OllamaEmbeddings(model=ollama_model) if use_ollama else GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
     return FAISS.from_texts(text_chunks, embedding=embeddings)
 
-def get_conversation_chain(vector_store, use_ollama):
-    llm = ChatOllama(model="llama2") if use_ollama else GooglePalm()
+def get_conversation_chain(vector_store, use_ollama, ollama_model):
+    llm = ChatOllama(model=ollama_model) if use_ollama else ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
     return ConversationalRetrievalChain.from_llm(
         llm=llm, retriever=vector_store.as_retriever(), memory=memory
@@ -30,21 +65,44 @@ def get_conversation_chain(vector_store, use_ollama):
 
 def main():
     st.set_page_config(page_title="Chat with Code", layout="wide")
-    st.header("Chat with Code")
+    apply_styles()
+    st.header("Chat with Code 💻")
+
+    st.sidebar.markdown("### Settings")
+    api_key_input = st.sidebar.text_input("Google API Key", value=os.environ.get("GOOGLE_API_KEY", ""), type="password")
+    if api_key_input:
+        os.environ["GOOGLE_API_KEY"] = api_key_input
 
     use_ollama = st.sidebar.checkbox("Use Ollama (offline) instead of Google Palm")
+    ollama_model = st.sidebar.text_input("Ollama Model Name", value="llama2") if use_ollama else "llama2"
+
     code_file = st.file_uploader("Upload your code file", type=["py", "js", "java", "cpp", "c", "rb", "go", "rs", "ts"])
 
     if code_file:
-        text = extract_text_from_code(code_file)
-        text_chunks = get_text_chunks(text)
-        vector_store = get_vector_store(text_chunks, use_ollama)
-        conversation = get_conversation_chain(vector_store, use_ollama)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        with st.spinner("Reading code..."):
+            text = extract_text_from_code(code_file)
+        
+        if text.strip():
+            st.success("Read code successfully!")
+            with st.expander("Show source code"):
+                st.code(text)
+                
+            text_chunks = get_text_chunks(text)
+            try:
+                vector_store = get_vector_store(text_chunks, use_ollama, ollama_model)
+                conversation = get_conversation_chain(vector_store, use_ollama, ollama_model)
 
-        user_question = st.text_input("Ask a question about your code:")
-        if user_question:
-            response = conversation({'question': user_question})
-            st.write("Response:", response['answer'])
+                user_question = st.text_input("Ask a question about your code:")
+                if user_question:
+                    with st.spinner("Thinking..."):
+                        response = conversation({'question': user_question})
+                        st.write("Response:", response['answer'])
+            except Exception as e:
+                st.error(f"Error: {e}")
+        else:
+            st.warning("The code file is empty.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

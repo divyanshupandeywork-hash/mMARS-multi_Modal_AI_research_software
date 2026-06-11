@@ -1,36 +1,86 @@
 import streamlit as st
 import os
-import pandas as pd
 import sqlite3
+import tempfile
+import pandas as pd
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import GooglePalmEmbeddings, OllamaEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import GooglePalm
-from langchain_community.chat_models import ChatOllama
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain_classic.chains import ConversationalRetrievalChain
+from langchain_classic.memory import ConversationBufferMemory
 
-os.environ['GOOGLE_API_KEY'] = st.secrets["GOOGLE_API_KEY"]
+# Try loading API key from config if exists
+try:
+    from config import GOOGLE_API_KEY
+    if GOOGLE_API_KEY:
+        os.environ['GOOGLE_API_KEY'] = GOOGLE_API_KEY
+except ImportError:
+    pass
+
+try:
+    if "GOOGLE_API_KEY" in st.secrets:
+        os.environ['GOOGLE_API_KEY'] = st.secrets["GOOGLE_API_KEY"]
+except Exception:
+    pass
+
+def apply_styles():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Inter:wght@300;400;600&display=swap');
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+        h1, h2, h3 {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            background: linear-gradient(135deg, #FF4B4B 0%, #FF8F8F 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 24px;
+            margin-bottom: 24px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
 def extract_text_from_sql(sql_file):
-    conn = sqlite3.connect(sql_file)
-    text = ""
-    for table in pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", conn)['name']:
-        text += f"Table: {table}\n"
-        text += pd.read_sql_query(f"SELECT * FROM {table} LIMIT 5", conn).to_string() + "\n\n"
-    conn.close()
-    return text
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as temp_file:
+            temp_file.write(sql_file.read())
+            temp_path = temp_file.name
+        
+        conn = sqlite3.connect(temp_path)
+        text = ""
+        tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", conn)
+        for table in tables['name']:
+            text += f"Table: {table}\n"
+            text += pd.read_sql_query(f"SELECT * FROM {table} LIMIT 5", conn).to_string() + "\n\n"
+        conn.close()
+        
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        return text
+    except Exception as e:
+        st.error(f"Error reading SQLite database: {e}")
+        return ""
 
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=256)
     return text_splitter.split_text(text)
 
-def get_vector_store(text_chunks, use_ollama):
-    embeddings = OllamaEmbeddings(model="llama2") if use_ollama else GooglePalmEmbeddings()
+def get_vector_store(text_chunks, use_ollama, ollama_model):
+    embeddings = OllamaEmbeddings(model=ollama_model) if use_ollama else GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     return FAISS.from_texts(text_chunks, embedding=embeddings)
 
-def get_conversation_chain(vector_store, use_ollama):
-    llm = ChatOllama(model="llama2") if use_ollama else GooglePalm()
+def get_conversation_chain(vector_store, use_ollama, ollama_model):
+    llm = ChatOllama(model=ollama_model) if use_ollama else ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
     return ConversationalRetrievalChain.from_llm(
         llm=llm, retriever=vector_store.as_retriever(), memory=memory
@@ -38,21 +88,44 @@ def get_conversation_chain(vector_store, use_ollama):
 
 def main():
     st.set_page_config(page_title="Chat with SQL", layout="wide")
-    st.header("Chat with SQL")
+    apply_styles()
+    st.header("Chat with SQL 🗄️")
 
-    use_ollama = st.sidebar.checkbox("Use Ollama (offline) instead of Google Palm")
-    sql_file = st.file_uploader("Upload your SQL file", type="db")
+    st.sidebar.markdown("### Settings")
+    api_key_input = st.sidebar.text_input("Google API Key", value=os.environ.get("GOOGLE_API_KEY", ""), type="password")
+    if api_key_input:
+        os.environ["GOOGLE_API_KEY"] = api_key_input
+
+    use_ollama = st.sidebar.checkbox("Use Ollama (offline) instead of Gemini")
+    ollama_model = st.sidebar.text_input("Ollama Model Name", value="llama2") if use_ollama else "llama2"
+
+    sql_file = st.file_uploader("Upload your SQLite SQL/DB file", type=["db", "sqlite"])
 
     if sql_file:
-        text = extract_text_from_sql(sql_file)
-        text_chunks = get_text_chunks(text)
-        vector_store = get_vector_store(text_chunks, use_ollama)
-        conversation = get_conversation_chain(vector_store, use_ollama)
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        with st.spinner("Extracting schema and rows..."):
+            text = extract_text_from_sql(sql_file)
+        
+        if text.strip():
+            st.success("Extracted DB schema and sample records!")
+            with st.expander("Show extracted Database Preview"):
+                st.text(text)
+                
+            text_chunks = get_text_chunks(text)
+            try:
+                vector_store = get_vector_store(text_chunks, use_ollama, ollama_model)
+                conversation = get_conversation_chain(vector_store, use_ollama, ollama_model)
 
-        user_question = st.text_input("Ask a question about your SQL database:")
-        if user_question:
-            response = conversation({'question': user_question})
-            st.write("Response:", response['answer'])
+                user_question = st.text_input("Ask a question about your SQL database:")
+                if user_question:
+                    with st.spinner("Thinking..."):
+                        response = conversation({'question': user_question})
+                        st.write("Response:", response['answer'])
+            except Exception as e:
+                st.error(f"Error: {e}")
+        else:
+            st.warning("Could not extract tables or contents from the uploaded DB file.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
