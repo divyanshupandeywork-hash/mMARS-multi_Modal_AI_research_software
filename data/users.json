@@ -1,0 +1,11 @@
+[
+  {
+    "id": "i4puf",
+    "name": "Guest Researcher",
+    "email": "guest@mmars-research.org",
+    "picture": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150",
+    "provider": "google",
+    "createdAt": "2026-06-11T13:26:58.814Z",
+    "updatedAt": "2026-06-11T13:35:34.642Z"
+  }
+]

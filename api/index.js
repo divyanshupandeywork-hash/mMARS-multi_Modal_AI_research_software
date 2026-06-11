@@ -2,8 +2,52 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { users, chats } from './db.js';
+
+// Helper to retrieve the Gemini API key, falling back to local files in dev environment
+const getApiKey = () => {
+  // 1. Check environment variables
+  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+  if (process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY;
+
+  // 2. Check local .env file
+  try {
+    const envPaths = [
+      path.join(process.cwd(), '.env'),
+      path.join(process.cwd(), 'api', '.env')
+    ];
+    for (const envPath of envPaths) {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf8');
+        const matchGemini = content.match(/^GEMINI_API_KEY\s*=\s*['"]?([^'"]+?)['"]?\s*$/m);
+        if (matchGemini && matchGemini[1]) return matchGemini[1].trim();
+        const matchGoogle = content.match(/^GOOGLE_API_KEY\s*=\s*['"]?([^'"]+?)['"]?\s*$/m);
+        if (matchGoogle && matchGoogle[1]) return matchGoogle[1].trim();
+      }
+    }
+  } catch (err) {
+    console.error('Error checking local .env:', err);
+  }
+
+  // 3. Fallback to parsing config.py in the workspace root
+  try {
+    const configPath = path.join(process.cwd(), 'config.py');
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, 'utf8');
+      const match = content.match(/GOOGLE_API_KEY\s*=\s*['"]([^'"]+?)['"]/);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+    }
+  } catch (err) {
+    console.error('Error reading config.py fallback:', err);
+  }
+
+  return null;
+};
 
 const app = express();
 app.use(cors());
@@ -198,7 +242,7 @@ app.delete('/api/chats/:id', authenticateToken, async (req, res) => {
 
 // 8. POST Chat proxy (secured through JWT auth)
 app.post('/api/chat', authenticateToken, async (req, res) => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  const apiKey = getApiKey();
   if (!apiKey) {
     return res.status(500).json({ 
       error: 'Gemini API Key is not configured on the server. Please add your GEMINI_API_KEY variable to Vercel.' 
