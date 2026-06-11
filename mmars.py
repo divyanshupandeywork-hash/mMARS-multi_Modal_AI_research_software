@@ -436,7 +436,10 @@ def main():
             # To avoid rebuilds on every session update, save the hash of uploaded files
             files_hash = hash(tuple(f.name for f in uploaded_files))
             
-            if "files_hash" not in st.session_state or st.session_state.files_hash != files_hash:
+            if ("files_hash" not in st.session_state or 
+                st.session_state.files_hash != files_hash or 
+                "conversation" not in st.session_state or 
+                st.session_state.conversation is None):
                 st.session_state.files_hash = files_hash
                 st.session_state.chat_history = []
                 

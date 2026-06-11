@@ -53,7 +53,7 @@ def get_text_chunks(text):
     return text_splitter.split_text(text)
 
 def get_vector_store(text_chunks, use_ollama, ollama_model):
-    embeddings = OllamaEmbeddings(model=ollama_model) if use_ollama else GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+    embeddings = OllamaEmbeddings(model=ollama_model) if use_ollama else GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     return FAISS.from_texts(text_chunks, embedding=embeddings)
 
 def get_conversation_chain(vector_store, use_ollama, ollama_model):
