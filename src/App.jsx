@@ -551,72 +551,29 @@ export default function App() {
       // 3. Setup chat history for backend (up to last 10 turns)
       const activeHistory = chatHistory.slice(-10);
 
-      // 4. Query backend with automatic rate limit retry mechanism
-      let retries = 0;
-      const maxRetries = 3;
-      let success = false;
-      let answer = '';
+      // 4. Query backend
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          parts,
+          history: activeHistory,
+          modelName,
+          temperature: parseFloat(temperature),
+          systemInstruction
+        })
+      });
 
-      while (retries < maxRetries && !success) {
-        try {
-          const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              parts,
-              history: activeHistory,
-              modelName,
-              temperature: parseFloat(temperature),
-              systemInstruction
-            })
-          });
-
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
-          }
-
-          const data = await response.json();
-          answer = data.answer;
-          success = true;
-        } catch (err) {
-          console.error(`Attempt ${retries + 1} failed:`, err);
-
-          const errMsg = err.message || '';
-          const isRateLimitOrQuota =
-            errMsg.includes('429') ||
-            errMsg.includes('503') ||
-            errMsg.toLowerCase().includes('quota') ||
-            errMsg.toLowerCase().includes('rate limit') ||
-            errMsg.toLowerCase().includes('limit exceeded') ||
-            errMsg.toLowerCase().includes('overloaded');
-
-          if (isRateLimitOrQuota && retries < maxRetries - 1) {
-            let delaySeconds = 5;
-            const match = errMsg.match(/Please retry in (\d+(?:\.\d+)?)/i);
-            if (match && match[1]) {
-              delaySeconds = Math.ceil(parseFloat(match[1]));
-            }
-
-            // Limit max delay to 60 seconds to avoid blocking indefinitely
-            if (delaySeconds > 60) {
-              throw err;
-            }
-
-            for (let sec = delaySeconds; sec > 0; sec--) {
-              setRetryCountdown(sec);
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-            setRetryCountdown(null);
-            retries++;
-          } else {
-            throw err;
-          }
-        }
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
       }
+
+      const data = await response.json();
+      const answer = data.answer;
 
       // Update history with response
       const updatedHistory = [...chatHistory, { role: 'user', content: currentQuestion }, { role: 'model', content: answer }];
